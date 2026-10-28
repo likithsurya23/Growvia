@@ -1,0 +1,184 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Growvia CRM Backend - Serverless Express.js API on AWS Lambda, API Gateway, and DynamoDB.
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: nodejs22.x
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        NODE_ENV: production
+        LEADS_TABLE: !Ref LeadsTable
+        DEALS_TABLE: !Ref DealsTable
+        USERS_TABLE: !Ref UsersTable
+        JWT_SECRET: !Ref JwtSecret
+
+Parameters:
+  Stage:
+    Type: String
+    Default: prod
+    Description: Deployment stage name (e.g. dev, prod)
+  LeadsTableName:
+    Type: String
+    Default: Growvia-Leads
+    Description: DynamoDB table name for leads
+  DealsTableName:
+    Type: String
+    Default: Growvia-Deals
+    Description: DynamoDB table name for deals
+  UsersTableName:
+    Type: String
+    Default: Growvia-Users
+    Description: DynamoDB table name for users
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    Default: growvia_jwt_production_secret_key_change_me
+    Description: Secret key used to sign and verify JWT authentication tokens
+
+Resources:
+  # =========================================================================
+  # DynamoDB Tables (On-Demand / PAY_PER_REQUEST billing)
+  # =========================================================================
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${UsersTableName}-${Stage}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: EmailIndex
+          KeySchema:
+            - AttributeName: email
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Project
+          Value: Growvia
+        - Key: Environment
+          Value: !Ref Stage
+
+  LeadsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${LeadsTableName}-${Stage}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Project
+          Value: Growvia
+        - Key: Environment
+          Value: !Ref Stage
+
+  DealsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${DealsTableName}-${Stage}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Project
+          Value: Growvia
+        - Key: Environment
+          Value: !Ref Stage
+
+  # =========================================================================
+  # API Gateway (HTTP API with CORS and greedy proxy)
+  # =========================================================================
+  GrowviaHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Stage
+      CorsConfiguration:
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+          - X-Amz-Date
+          - X-Api-Key
+          - X-Amz-Security-Token
+        AllowOrigins:
+          - '*'
+
+  # =========================================================================
+  # Lambda Function (Serverless Express handler)
+  # =========================================================================
+  GrowviaApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: src/handler.handler
+      Description: Growvia CRM Express API handler backed by DynamoDB
+      Policies:
+        # Least-privilege IAM permissions restricted strictly to Users, Leads and Deals tables
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LeadsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DealsTable
+      Events:
+        ProxyApiRoot:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref GrowviaHttpApi
+            Path: /
+            Method: ANY
+        ProxyApiGreedy:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref GrowviaHttpApi
+            Path: /{proxy+}
+            Method: ANY
+
+Outputs:
+  ApiUrl:
+    Description: Base URL for Growvia CRM HTTP API
+    Value: !Sub 'https://${GrowviaHttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
+  FunctionArn:
+    Description: Lambda Function ARN
+    Value: !GetAtt GrowviaApiFunction.Arn
+  UsersTableNameOutput:
+    Description: DynamoDB Users Table Name
+    Value: !Ref UsersTable
+  LeadsTableNameOutput:
+    Description: DynamoDB Leads Table Name
+    Value: !Ref LeadsTable
+  DealsTableNameOutput:
+    Description: DynamoDB Deals Table Name
+    Value: !Ref DealsTable
